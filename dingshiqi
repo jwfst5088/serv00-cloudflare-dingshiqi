@@ -1,29 +1,41 @@
 addEventListener('fetch', event => {
-  event.respondWith(handleRequest(event.request))
-})
+  event.respondWith(handleRequest(event.request));
+});
 
 addEventListener('scheduled', event => {
-  event.waitUntil(handleScheduled(event.scheduledTime))
-})
+  event.waitUntil(handleScheduled(event.scheduledTime));
+});
 
 async function handleRequest(request) {
-  return new Response('Worker is running')
+  return new Response('Worker is running');
 }
 
 async function handleScheduled(scheduledTime) {
-  const accounts = JSON.parse(ACCOUNTS_JSON)
-  const results = await loginAccounts(accounts)
-  await sendSummary(results)
+  try {
+    const accounts = JSON.parse(ACCOUNTS_JSON);
+    console.log(`Total accounts to process: ${accounts.length}`);
+    const results = await loginAccounts(accounts);
+    await sendSummary(results);
+  } catch (error) {
+    console.error('Error during scheduled task:', error);
+  }
 }
 
 async function loginAccounts(accounts) {
-  const results = []
+  const results = [];
   for (const account of accounts) {
-    const result = await loginAccount(account)
-    results.push({ ...account, ...result })
-    await delay(Math.floor(Math.random() * 8000) + 1000)
+    try {
+      console.log(`Processing account: ${account.username}`);
+      const result = await loginAccount(account);
+      results.push({ ...account, ...result });
+    } catch (error) {
+      console.error(`Error processing account ${account.username}:`, error);
+      results.push({ ...account, success: false, message: `Error: ${error.message}` });
+    }
+    // Adding a random delay to avoid triggering anti-bot measures
+    await delay(Math.floor(Math.random() * 8000) + 1000);
   }
-  return results
+  return results;
 }
 
 function generateRandomUserAgent() {
@@ -38,10 +50,10 @@ function generateRandomUserAgent() {
 }
 
 async function loginAccount(account) {
-  const { username, password, panelnum, type } = account
+  const { username, password, panelnum, type } = account;
   let url = type === 'ct8' 
     ? 'https://panel.ct8.pl/login/?next=/' 
-    : `https://panel${panelnum}.serv00.com/login/?next=/`
+    : `https://panel${panelnum}.serv00.com/login/?next=/`;
 
   const userAgent = generateRandomUserAgent();
 
@@ -51,24 +63,24 @@ async function loginAccount(account) {
       headers: {
         'User-Agent': userAgent,
       },
-    })
+    });
 
-    const pageContent = await response.text()
-    const csrfMatch = pageContent.match(/name="csrfmiddlewaretoken" value="([^"]*)"/)
-    const csrfToken = csrfMatch ? csrfMatch[1] : null
+    const pageContent = await response.text();
+    const csrfMatch = pageContent.match(/name="csrfmiddlewaretoken" value="([^"]*)"/);
+    const csrfToken = csrfMatch ? csrfMatch[1] : null;
 
     if (!csrfToken) {
-      throw new Error('CSRF token not found')
+      throw new Error('CSRF token not found');
     }
 
-    const initialCookies = response.headers.get('set-cookie') || ''
+    const initialCookies = response.headers.get('set-cookie') || '';
 
     const formData = new URLSearchParams({
       'username': username,
       'password': password,
       'csrfmiddlewaretoken': csrfToken,
       'next': '/'
-    })
+    });
 
     const loginResponse = await fetch(url, {
       method: 'POST',
@@ -80,102 +92,97 @@ async function loginAccount(account) {
       },
       body: formData.toString(),
       redirect: 'manual'
-    })
+    });
 
-    console.log(`Login response status: ${loginResponse.status}`)
-    console.log(`Login response headers: ${JSON.stringify(Object.fromEntries(loginResponse.headers))}`)
-
-    const loginResponseBody = await loginResponse.text()
-    console.log(`Login response body: ${loginResponseBody.substring(0, 200)}...`)
+    const loginResponseBody = await loginResponse.text();
 
     if (loginResponse.status === 302 && loginResponse.headers.get('location') === '/') {
-      const loginCookies = loginResponse.headers.get('set-cookie') || ''
-      const allCookies = combineCookies(initialCookies, loginCookies)
+      const loginCookies = loginResponse.headers.get('set-cookie') || '';
+      const allCookies = combineCookies(initialCookies, loginCookies);
 
       const dashboardResponse = await fetch(url.replace('/login/', '/'), {
         headers: {
           'Cookie': allCookies,
           'User-Agent': userAgent,
         }
-      })
-      const dashboardContent = await dashboardResponse.text()
-      console.log(`Dashboard content: ${dashboardContent.substring(0, 200)}...`)
+      });
+      const dashboardContent = await dashboardResponse.text();
 
       if (dashboardContent.includes('href="/logout/"') || dashboardContent.includes('href="/wyloguj/"')) {
-        const nowUtc = formatToISO(new Date())
-        const nowBeijing = formatToISO(new Date(Date.now() + 8 * 60 * 60 * 1000))
-        const message = `账号 ${username} (${type}) 于北京时间 ${nowBeijing}（UTC时间 ${nowUtc}）登录成功！`
-        console.log(message)
-        await sendTelegramMessage(message)
-        return { success: true, message }
+        const nowUtc = formatToISO(new Date());
+        const nowBeijing = formatToISO(new Date(Date.now() + 8 * 60 * 60 * 1000));
+        const message = `账号 ${username} (${type}) 于北京时间 ${nowBeijing}（UTC时间 ${nowUtc}）登录成功！`;
+        console.log(message);
+        await sendTelegramMessage(message);
+        return { success: true, message };
       } else {
-        const message = `账号 ${username} (${type}) 登录后未找到登出链接，可能登录失败。`
-        console.error(message)
-        await sendTelegramMessage(message)
-        return { success: false, message }
+        const message = `账号 ${username} (${type}) 登录后未找到登出链接，可能登录失败。`;
+        console.error(message);
+        await sendTelegramMessage(message);
+        return { success: false, message };
       }
     } else if (loginResponseBody.includes('Nieprawidłowy login lub hasło')) {
-      const message = `账号 ${username} (${type}) 登录失败：用户名或密码错误。`
-      console.error(message)
-      await sendTelegramMessage(message)
-      return { success: false, message }
+      const message = `账号 ${username} (${type}) 登录失败：用户名或密码错误。`;
+      console.error(message);
+      await sendTelegramMessage(message);
+      return { success: false, message };
     } else {
-      const message = `账号 ${username} (${type}) 登录失败，未知原因。请检查账号和密码是否正确。`
-      console.error(message)
-      await sendTelegramMessage(message)
-      return { success: false, message }
+      const message = `账号 ${username} (${type}) 登录失败，未知原因。请检查账号和密码是否正确。`;
+      console.error(message);
+      await sendTelegramMessage(message);
+      return { success: false, message };
     }
   } catch (error) {
-    const message = `账号 ${username} (${type}) 登录时出现错误: ${error.message}`
-    console.error(message)
-    await sendTelegramMessage(message)
-    return { success: false, message }
+    const message = `账号 ${username} (${type}) 登录时出现错误: ${error.message}`;
+    console.error(message);
+    await sendTelegramMessage(message);
+    return { success: false, message };
   }
 }
 
 function combineCookies(cookies1, cookies2) {
-  const cookieMap = new Map()
-  
+  const cookieMap = new Map();
+
   const parseCookies = (cookieString) => {
     cookieString.split(',').forEach(cookie => {
-      const [fullCookie] = cookie.trim().split(';')
-      const [name, value] = fullCookie.split('=')
+      const [fullCookie] = cookie.trim().split(';');
+      const [name, value] = fullCookie.split('=');
       if (name && value) {
-        cookieMap.set(name.trim(), value.trim())
+        cookieMap.set(name.trim(), value.trim());
       }
-    })
-  }
+    });
+  };
 
-  parseCookies(cookies1)
-  parseCookies(cookies2)
+  parseCookies(cookies1);
+  parseCookies(cookies2);
 
-  return Array.from(cookieMap.entries()).map(([name, value]) => `${name}=${value}`).join('; ')
+  return Array.from(cookieMap.entries()).map(([name, value]) => `${name}=${value}`).join('; ');
 }
 
 async function sendSummary(results) {
-  const successfulLogins = results.filter(r => r.success)
-  const failedLogins = results.filter(r => !r.success)
+  const successfulLogins = results.filter(r => r.success);
+  const failedLogins = results.filter(r => !r.success);
 
-  let summaryMessage = '登录结果统计：\n'
-  summaryMessage += `成功登录的账号：${successfulLogins.length}\n`
-  summaryMessage += `登录失败的账号：${failedLogins.length}\n`
+  let summaryMessage = '登录结果统计：\n';
+  summaryMessage += `成功登录的账号：${successfulLogins.length}\n`;
+  summaryMessage += `登录失败的账号：${failedLogins.length}\n`;
 
   if (failedLogins.length > 0) {
-    summaryMessage += '\n登录失败的账号列表：\n'
+    summaryMessage += '\n登录失败的账号列表：\n';
     failedLogins.forEach(({ username, type, message }) => {
-      summaryMessage += `- ${username} (${type}): ${message}\n`
-    })
+      summaryMessage += `- ${username} (${type}): ${message}\n`;
+    });
   }
 
-  console.log(summaryMessage)
-  await sendTelegramMessage(summaryMessage)
+  console.log(summaryMessage);
+  await sendTelegramMessage(summaryMessage);
 }
 
 async function sendTelegramMessage(message) {
-  const telegramConfig = JSON.parse(TELEGRAM_JSON)
-  const { telegramBotToken, telegramBotUserId } = telegramConfig
-  const url = `https://api.telegram.org/bot${telegramBotToken}/sendMessage`
-  
+  const telegramConfig = JSON.parse(TELEGRAM_JSON);
+  const { telegramBotToken, telegramBotUserId } = telegramConfig;
+  const url = `https://api.telegram.org/bot${telegramBotToken}/sendMessage`;
+
   try {
     await fetch(url, {
       method: 'POST',
@@ -184,16 +191,16 @@ async function sendTelegramMessage(message) {
         chat_id: telegramBotUserId,
         text: message
       })
-    })
+    });
   } catch (error) {
-    console.error('Error sending Telegram message:', error)
+    console.error('Error sending Telegram message:', error);
   }
 }
 
 function formatToISO(date) {
-  return date.toISOString().replace('T', ' ').replace('Z', '').replace(/\.\d{3}Z/, '')
+  return date.toISOString().replace('T', ' ').replace('Z', '').replace(/\.\d{3}Z/, '');
 }
 
 function delay(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms))
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
